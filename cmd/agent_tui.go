@@ -28,7 +28,6 @@ import (
 
 type agentTUIOptions struct {
 	Model               string
-	OpenModelPicker     bool
 	System              string
 	Format              string
 	Options             map[string]any
@@ -38,142 +37,6 @@ type agentTUIOptions struct {
 	AllowAllTools       bool
 	ToolsDisabled       bool
 	MultiModal          bool
-}
-
-func registerAgentFlags(cmd *cobra.Command) {
-	cmd.Flags().String("model", "", "Model to use")
-	cmd.Flags().String("keepalive", "", "Duration to keep a model loaded (e.g. 5m)")
-	cmd.Flags().String("format", "", "Response format (e.g. json)")
-	cmd.Flags().String("think", "", "Enable thinking mode: true/false or high/medium/low for supported models")
-	cmd.Flags().Lookup("think").NoOptDefVal = "true"
-	cmd.Flags().Bool("auto-approve-tools", false, "Allow agent tools to run without prompting")
-	cmd.Flags().Bool("yolo", false, "Alias for --auto-approve-tools")
-	cmd.Flags().Bool("no-tools", false, "Disable agent tools")
-}
-
-func AgentHandler(cmd *cobra.Command, _ []string) error {
-	opts := agentTUIOptions{
-		Model:   strings.TrimSpace(config.LastModel()),
-		Options: map[string]any{},
-	}
-	thinkExplicit, err := applyAgentFlags(cmd, &opts)
-	if err != nil {
-		return err
-	}
-
-	if strings.TrimSpace(opts.Model) == "" {
-		opts.OpenModelPicker = true
-	} else if cmd.Flags().Lookup("model") == nil || !cmd.Flags().Lookup("model").Changed {
-		opts.OpenModelPicker = true
-	}
-
-	client, err := api.ClientFromEnvironment()
-	if err != nil {
-		return err
-	}
-
-	if opts.OpenModelPicker {
-		modelName, err := selectAgentModel(cmd.Context(), client, opts.Model)
-		if errors.Is(err, launch.ErrCancelled) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		opts.Model = modelName
-		opts.OpenModelPicker = false
-	}
-
-	if strings.TrimSpace(opts.Model) != "" {
-		info, err := prepareAgentModel(cmd, client, &opts, thinkExplicit)
-		if err != nil {
-			if handleCloudAuthorizationError(err) {
-				return nil
-			}
-			return err
-		}
-		opts.System = info.System
-		if err := saveLastAgentModel(opts.Model); err != nil {
-			return err
-		}
-	}
-
-	if err := GenerateAgentTUI(cmd, client, opts); err != nil {
-		if handleCloudAuthorizationError(err) {
-			return nil
-		}
-		return fmt.Errorf("error running agent: %w", err)
-	}
-	return nil
-}
-
-func applyAgentFlags(cmd *cobra.Command, opts *agentTUIOptions) (bool, error) {
-	if flag := cmd.Flags().Lookup("model"); flag != nil && flag.Changed {
-		modelName, err := cmd.Flags().GetString("model")
-		if err != nil {
-			return false, err
-		}
-		modelName = strings.TrimSpace(modelName)
-		if modelName == "" {
-			return false, errors.New("--model cannot be empty")
-		}
-		opts.Model = modelName
-		opts.OpenModelPicker = false
-	}
-
-	format, err := cmd.Flags().GetString("format")
-	if err != nil {
-		return false, err
-	}
-	opts.Format = format
-
-	thinkExplicit := false
-	thinkFlag := cmd.Flags().Lookup("think")
-	if thinkFlag != nil && thinkFlag.Changed {
-		thinkExplicit = true
-		thinkStr, err := cmd.Flags().GetString("think")
-		if err != nil {
-			return false, err
-		}
-		switch thinkStr {
-		case "", "true":
-			opts.Think = &api.ThinkValue{Value: true}
-		case "false":
-			opts.Think = &api.ThinkValue{Value: false}
-		case "high", "medium", "low", "max":
-			opts.Think = &api.ThinkValue{Value: thinkStr}
-		default:
-			return false, fmt.Errorf("invalid value for --think: %q (must be true, false, high, medium, low, or max)", thinkStr)
-		}
-	}
-
-	keepAlive, err := cmd.Flags().GetString("keepalive")
-	if err != nil {
-		return false, err
-	}
-	if keepAlive != "" {
-		d, err := time.ParseDuration(keepAlive)
-		if err != nil {
-			return false, err
-		}
-		opts.KeepAlive = &api.Duration{Duration: d}
-	}
-
-	autoApprove, err := cmd.Flags().GetBool("auto-approve-tools")
-	if err != nil {
-		return false, err
-	}
-	yolo, err := cmd.Flags().GetBool("yolo")
-	if err != nil {
-		return false, err
-	}
-	opts.AllowAllTools = autoApprove || yolo
-	toolsDisabled, err := cmd.Flags().GetBool("no-tools")
-	if err != nil {
-		return false, err
-	}
-	opts.ToolsDisabled = toolsDisabled
-	return thinkExplicit, nil
 }
 
 func saveLastAgentModel(model string) error {
@@ -282,43 +145,6 @@ func GenerateAgentTUI(cmd *cobra.Command, client *api.Client, opts agentTUIOptio
 		},
 	})
 	return err
-}
-
-func selectAgentModel(ctx context.Context, client *api.Client, current string) (string, error) {
-	models, err := agentModelOptions(ctx, client)
-	if err != nil {
-		return "", err
-	}
-	if len(models) == 0 {
-		return "", errors.New("no models available, run 'ollama pull <model>' first")
-	}
-
-	items := agentSelectionItems(models)
-	switch {
-	case launch.DefaultSingleSelectorWithUpdates != nil:
-		return launch.DefaultSingleSelectorWithUpdates("Select model to run:", items, current, nil)
-	case launch.DefaultSingleSelector != nil:
-		return launch.DefaultSingleSelector("Select model to run:", items, current)
-	default:
-		return "", errors.New("no selector configured")
-	}
-}
-
-func agentSelectionItems(models []agentchat.ModelOption) []launch.SelectionItem {
-	items := make([]launch.SelectionItem, 0, len(models))
-	for _, model := range models {
-		items = append(items, launch.SelectionItem{
-			Name:              model.Name,
-			Description:       agentSelectionDescription(model),
-			Recommended:       model.Recommended,
-			AvailabilityBadge: model.AvailabilityBadge,
-		})
-	}
-	return items
-}
-
-func agentSelectionDescription(model agentchat.ModelOption) string {
-	return strings.TrimSpace(model.Description)
 }
 
 var agentGetwd = os.Getwd

@@ -7,11 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/cmd/config"
-	agentchat "github.com/ollama/ollama/cmd/tui/chat"
 )
 
 func TestAgentSystemPromptIncludesSessionWorkingDirOnce(t *testing.T) {
@@ -46,26 +43,6 @@ func TestAgentWorkingDirIgnoresGetwdFailure(t *testing.T) {
 
 	if got := agentWorkingDir(); got != "" {
 		t.Fatalf("working directory = %q, want empty on getwd failure", got)
-	}
-}
-
-func TestAgentSelectionItemsUseLaunchSections(t *testing.T) {
-	items := agentSelectionItems([]agentchat.ModelOption{
-		{Name: "glm-5.2:cloud", Description: "cloud", Recommended: true, Cloud: true},
-		{Name: "llama3.2", Description: "local"},
-	})
-
-	if len(items) != 2 {
-		t.Fatalf("items = %d, want 2", len(items))
-	}
-	if !items[0].Recommended {
-		t.Fatalf("cloud recommendation should be pinned: %#v", items[0])
-	}
-	if items[1].Recommended {
-		t.Fatalf("local selected model should stay in launch More section: %#v", items[1])
-	}
-	if items[1].Description != "local" {
-		t.Fatalf("selected model description = %q, want plain description", items[1].Description)
 	}
 }
 
@@ -118,21 +95,5 @@ func TestSaveLastAgentModel(t *testing.T) {
 	}
 	if got := config.LastModel(); got != "qwen3:8b" {
 		t.Fatalf("blank save changed last model to %q", got)
-	}
-}
-
-func TestApplyAgentFlagsNoTools(t *testing.T) {
-	cmd := &cobra.Command{}
-	registerAgentFlags(cmd)
-	if err := cmd.Flags().Set("no-tools", "true"); err != nil {
-		t.Fatal(err)
-	}
-
-	var opts agentTUIOptions
-	if _, err := applyAgentFlags(cmd, &opts); err != nil {
-		t.Fatalf("applyAgentFlags returned error: %v", err)
-	}
-	if !opts.ToolsDisabled {
-		t.Fatal("--no-tools should disable tools")
 	}
 }
